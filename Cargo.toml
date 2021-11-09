@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "impl-trait",
+    "async_t_internal",
     "async_t",
 ]

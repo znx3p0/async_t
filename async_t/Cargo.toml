@@ -1,11 +1,13 @@
 [package]
 name = "async_t"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2021"
+description = "zero-cost compile-time async-traits"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-impl-trait = { path = "../impl-trait" }
+async_t_internal = { path = "../async_t_internal" }
 async-trait = "0.1"
 rustversion = "1"
