@@ -2,7 +2,7 @@
 name = "async_t_internal"
 version = "0.1.0"
 edition = "2021"
-description = ""
+description = "contains async_t macro"
 license = "MIT"
 
 
