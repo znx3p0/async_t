@@ -1,19 +1,17 @@
-
 #![allow(unused_imports)]
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    spanned::Spanned,
-    Block, GenericParam, ImplItem, ItemImpl, ItemTrait, Lifetime, LifetimeDef,
-    TraitItem,
+    spanned::Spanned, Block, GenericParam, ImplItem, ItemImpl, ItemTrait, Lifetime, LifetimeDef,
+    Path, ReturnType, TraitItem,
 };
 
 /// requires nightly and cannot be used with dynamic dispatch.
 /// also has limited support for generics.
 /// | it doesn't use any dynamic dispatch and is a complete zero cost wrapper.
 /// | requires features [ generic_associated_types, type_alias_impl_trait ]
-/// | if the compiler is not nighlty, it will default to dtolnay's async_trait
+/// | if the compiler is not nightly, it will default to dtolnay's async_trait
 /// | known bug: lifetime errors might be thrown when bounds are different than declared
 #[proc_macro_attribute]
 pub fn async_trait(_: TokenStream, tokens: TokenStream) -> TokenStream {
@@ -28,56 +26,85 @@ pub fn async_trait(_: TokenStream, tokens: TokenStream) -> TokenStream {
 
 fn process_trait(mut tr: ItemTrait) -> TokenStream {
     let span = tr.span();
-    let mut original = tr.clone();
-    original.ident = format_ident!("Dyn{}", original.ident);
     let mut extra_types = vec![];
+
+    let impl_generics = tr.generics.type_params();
+    let has_generics = impl_generics.collect::<Vec<_>>().len() > 0;
+    let impl_generics = tr.generics.type_params();
+    let where_clause = if has_generics {
+        quote!(where #(#impl_generics: 'async_t,)*)
+    } else {
+        quote!()
+    };
+
     for item in tr.items.iter_mut() {
         if let TraitItem::Method(method) = item {
-            if method.sig.asyncness.is_some() {
-                let ident = format_ident!("{}Fut", method.sig.ident);
-
-                // generate where clause from generics
-                let mut needs_where = false;
-                let gl = tr.generics.params.clone()
-                    .into_iter()
-                    .map(|s| {
-                        match s {
-                            GenericParam::Type(s) => {
-                                needs_where = true;
-                                let ident = s.ident;
-                                quote!(#ident: 'async_t)
-                            },
-                            _=> quote!(),
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let wh = match needs_where {
-                    true => quote!(where #(#gl),*),
-                    false => quote!(),
+            if method.sig.asyncness.take().is_some() {
+                let mut unsend = false;
+                let mut attr_iter = method.attrs.iter().enumerate();
+                let index = loop {
+                    if let Some((index, attr)) = attr_iter.next() {
+                        if quote!(#attr).to_string() == quote!(#[unsend]).to_string() {
+                            unsend = true;
+                            break Some(index);
+                        };
+                    } else {
+                        break None;
+                    }
                 };
+                if let Some(i) = index {
+                    method.attrs.remove(i);
+                }
 
-                let extra = match method.sig.output.clone() {
+                let tp = method.sig.generics.type_params().map(|s| &s.ident);
+                let lf = method.sig.generics.lifetimes();
+                let name = format_ident!("{}Fut", &method.sig.ident);
+
+                let ty = match method.sig.output.clone() {
                     syn::ReturnType::Default => {
-                        quote!(#[allow(non_camel_case_types)] type #ident<'async_t>: std::future::Future<Output = ()> + Send + 'async_t #wh;)
+                        quote!(())
                     }
                     syn::ReturnType::Type(_, ty) => {
-                        quote!(#[allow(non_camel_case_types)] type #ident<'async_t>: std::future::Future<Output = #ty> + Send + 'async_t #wh;)
+                        quote!(#ty)
                     }
                 };
-                extra_types.push(extra.clone());
+                let extra_type = quote!(type #name<'async_t #(,#lf: 'async_t)* #(,#tp: 'async_t)*>: Future<Output = #ty> + 'async_t #where_clause;);
+                extra_types.push(extra_type);
 
-                // remove async since it is not yet supported by traits
-                method.sig.asyncness = None;
-                method.sig.output = syn::parse2(quote!( -> Self::#ident<'async_t> )).unwrap();
+                let tp = method.sig.generics.type_params().map(|s| &s.ident);
+                let lf = method.sig.generics.lifetimes();
+                let name = format_ident!("{}Fut", &method.sig.ident);
+                let ret_ty: ReturnType =
+                    syn::parse2(quote!(-> Self::#name<'async_t #(,#lf)* #(,#tp)*>)).unwrap();
+                method.sig.output = ret_ty;
+
+                method
+                    .sig
+                    .generics
+                    .type_params_mut()
+                    .map(|p| {
+                        if !unsend {
+                            p.bounds.push(syn::parse2(quote!(Send)).unwrap());
+                        }
+                        p.bounds.push(syn::parse2(quote!('async_t)).unwrap());
+                    })
+                    .for_each(drop);
+
+                method
+                    .sig
+                    .generics
+                    .lifetimes_mut()
+                    .map(|s| s.bounds.push_value(syn::parse2(quote!('async_t)).unwrap()))
+                    .for_each(drop);
+
+                method
+                    .sig
+                    .generics
+                    .params
+                    .push(GenericParam::Lifetime(LifetimeDef::new(Lifetime::new(
+                        "'async_t", span,
+                    ))))
             }
-
-            method
-                .sig
-                .generics
-                .params
-                .push(GenericParam::Lifetime(LifetimeDef::new(Lifetime::new(
-                    "'async_t", span,
-                ))))
         }
     }
     for ty in extra_types {
@@ -86,65 +113,111 @@ fn process_trait(mut tr: ItemTrait) -> TokenStream {
 
     quote!(
         #tr
-    ).into()
+    )
+    .into()
 }
 
 fn process_impl(mut imp: ItemImpl) -> TokenStream {
     let span = imp.span();
-
     let mut extra_types = vec![];
+
+    let impl_generics = imp.generics.type_params();
+    let has_generics = impl_generics.collect::<Vec<_>>().len() > 0;
+    let impl_generics = imp.generics.type_params();
+    let where_clause = if has_generics {
+        quote!(where #(#impl_generics: 'async_t,)*)
+    } else {
+        quote!()
+    };
+    // panic!("{}", where_clause.to_string());
+
     for item in imp.items.iter_mut() {
-        if let syn::ImplItem::Method(method) = item {
-            // add async to method
-            if method.sig.asyncness.is_some() {
-
-                // add where to extra ype representing async method
-                let mut needs_where = false;
-                let gl = imp.generics.type_params()
-                    .into_iter()
-                    .map(|s| {
-                            needs_where = true;
-                            let ident = &s.ident;
-                            quote!(#ident: 'async_t)
-                    })
-                    .collect::<Vec<_>>();
-                let wh = match needs_where {
-                    true => quote!(where #(#gl),*),
-                    false => quote!(),
+        if let ImplItem::Method(method) = item {
+            if method.sig.asyncness.take().is_some() {
+                let mut unsend = false;
+                let mut attr_iter = method.attrs.iter().enumerate();
+                let index = loop {
+                    if let Some((index, attr)) = attr_iter.next() {
+                        if quote!(#attr).to_string() == quote!(#[unsend]).to_string() {
+                            unsend = true;
+                            break Some(index);
+                        };
+                    } else {
+                        break None;
+                    }
                 };
+                if let Some(i) = index {
+                    method.attrs.remove(i);
+                }
 
-                let ident = format_ident!("{}Fut", method.sig.ident);
-                let extra = match method.sig.output.clone() {
+                let gen = method.sig.generics.clone();
+                // let tp = gen.type_params();
+                let tp = gen.type_params().map(|s| &s.ident);
+                let lf = gen.lifetimes();
+
+                let name = format_ident!("{}Fut", &method.sig.ident);
+
+                let ty = match method.sig.output.clone() {
                     syn::ReturnType::Default => {
-                        quote!(#[allow(non_camel_case_types)] type #ident<'async_t> #wh = impl std::future::Future<Output = ()> + Send + 'async_t;)
+                        quote!(())
                     }
                     syn::ReturnType::Type(_, ty) => {
-                        quote!(#[allow(non_camel_case_types)] type #ident<'async_t> #wh = impl std::future::Future<Output = #ty> + Send + 'async_t;)
+                        quote!(#ty)
                     }
                 };
 
-                extra_types.push(extra);
-                method.sig.asyncness = None;
-                method.sig.output = syn::parse2(quote!( -> Self::#ident<'async_t> )).unwrap();
+                let extra_type = quote!(
+                    type #name<'async_t #(,#lf: 'async_t)* #(,#tp: 'async_t)*> #where_clause = impl std::future::Future<Output = #ty>;
+                );
+                extra_types.push(extra_type);
 
-                // add 'async_t lifetime to method
+                let tp = method.sig.generics.type_params().map(|s| &s.ident);
+                // let tp = method.sig.generics.type_params();
+                let lf = method.sig.generics.lifetimes();
+                let name = format_ident!("{}Fut", &method.sig.ident);
+                let ret_ty: ReturnType =
+                    syn::parse2(quote!(-> Self::#name<'async_t #(,#lf)* #(,#tp)*>)).unwrap();
+                method.sig.output = ret_ty;
+
+                method
+                    .sig
+                    .generics
+                    .type_params_mut()
+                    .map(|p| {
+                        if !unsend {
+                            p.bounds.push(syn::parse2(quote!(Send)).unwrap());
+                        }
+                        p.bounds.push(syn::parse2(quote!('async_t)).unwrap());
+                    })
+                    .for_each(drop);
+
+                let block = &method.block;
+                let block: Block = syn::parse2(quote!({ async move { #block } })).unwrap();
+                method.block = block;
+
+                method
+                    .sig
+                    .generics
+                    .lifetimes_mut()
+                    .map(|s| s.bounds.push_value(syn::parse2(quote!('async_t)).unwrap()))
+                    .for_each(drop);
+
                 method
                     .sig
                     .generics
                     .params
                     .push(GenericParam::Lifetime(LifetimeDef::new(Lifetime::new(
                         "'async_t", span,
-                    ))));
-                let block = method.block.clone();
-                let block = syn::parse2::<Block>(quote!({ async move #block })).unwrap();
-                method.block = block;
+                    ))))
             }
         }
     }
     for ty in extra_types {
         imp.items.push(ImplItem::Verbatim(ty))
     }
+
     quote!(
         #imp
-    ).into()
+    )
+    .into()
 }
