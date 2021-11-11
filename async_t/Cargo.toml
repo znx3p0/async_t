@@ -1,6 +1,6 @@
 [package]
 name = "async_t"
-version = "0.3.0"
+version = "0.2.0"
 edition = "2021"
 description = "zero-cost async-traits"
 license = "MIT"
