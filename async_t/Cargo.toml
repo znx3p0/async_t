@@ -1,6 +1,6 @@
 [package]
 name = "async_t"
-version = "0.3.0"
+version = "0.2.0"
 edition = "2021"
 description = "zero-cost async-traits"
 license = "MIT"
@@ -11,5 +11,6 @@ keywords = [ "async-trait", "async" ]
 
 [dependencies]
 async_t_internal = { path = "../async_t_internal" }
+# async_t_internal = "0.4.0"
 async-trait = "0.1"
 rustversion = "1"
