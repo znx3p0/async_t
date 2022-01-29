@@ -1,6 +1,6 @@
 [package]
 name = "async_t_internal"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "contains async_t macro"
 license = "MIT"

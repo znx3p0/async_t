@@ -19,7 +19,7 @@ pub fn async_trait(_: TokenStream, tokens: TokenStream) -> TokenStream {
     }
 }
 
-/// impl overload!
+/// impl overload! add superpowers to your traits!
 /// makes existential types returnable for methods **recursively**,
 /// meaning that these methods can be more flexible than normal rust functions.
 /// The only downside is that it doesn't support dynamic dispatch.
