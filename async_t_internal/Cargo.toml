@@ -11,6 +11,7 @@ repository = "https://github.com/znx3p0/async_t"
 [dependencies]
 syn = { version = "1", features = [ "full" ] }
 quote = "1"
+proc-macro-error = "1"
 
 [lib]
 proc-macro = true
