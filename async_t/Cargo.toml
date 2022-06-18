@@ -10,7 +10,7 @@ keywords = [ "async-trait", "async" ]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async_t_internal = { path = "../async_t_internal", version = "0.6.0" }
+async_t_internal = { path = "../async_t_internal", version = "0.6.1" }
 # async_t_internal = "0.4.0"
 async-trait = { version = "0.1.56", optional = true }
 
