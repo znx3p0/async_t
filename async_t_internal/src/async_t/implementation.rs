@@ -30,10 +30,10 @@ pub(crate) fn implementation(mut inner_trait: ItemImpl) -> TokenStream {
 
                 let ret = match &method.sig.output {
                     syn::ReturnType::Default => {
-                        quote!(-> impl core::future::Future<Output = ()> + 'future #send)
+                        quote!(-> impl ::core::future::Future<Output = ()> + 'async_trait #send)
                     }
                     syn::ReturnType::Type(_, ty) => {
-                        quote!(-> impl core::future::Future<Output = #ty> + 'future #send)
+                        quote!(-> impl ::core::future::Future<Output = #ty> + 'async_trait #send)
                     }
                 };
                 method.sig.output = syn::parse2(ret).unwrap();
@@ -41,7 +41,7 @@ pub(crate) fn implementation(mut inner_trait: ItemImpl) -> TokenStream {
                     .sig
                     .generics
                     .params
-                    .push(syn::parse2(quote!('future)).unwrap());
+                    .push(syn::parse2(quote!('async_trait)).unwrap());
                 let block = &method.block;
                 method.block = syn::parse2(quote! {
                     {
@@ -52,7 +52,9 @@ pub(crate) fn implementation(mut inner_trait: ItemImpl) -> TokenStream {
                 })
                 .unwrap();
                 method.sig.generics.type_params_mut().for_each(|param| {
-                    param.bounds.push(syn::parse2(quote!('future)).unwrap());
+                    param
+                        .bounds
+                        .push(syn::parse2(quote!('async_trait)).unwrap());
                 });
                 Some(())
             });

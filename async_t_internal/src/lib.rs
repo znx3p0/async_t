@@ -36,11 +36,13 @@ pub fn async_trait(_: TokenStream, tokens: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn impl_trait(_: TokenStream, tokens: TokenStream) -> TokenStream {
-    match syn::parse::<ItemTrait>(tokens.clone()) {
+    let ts = match syn::parse::<ItemTrait>(tokens.clone()) {
         Ok(inner_trait) => impl_trait::impl_trait(inner_trait),
         Err(_) => {
             let inner_trait = syn::parse::<ItemImpl>(tokens).unwrap();
             impl_trait::trait_implementation(inner_trait)
         }
-    }
+    };
+
+    ts.into()
 }

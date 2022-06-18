@@ -13,7 +13,7 @@ use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::token::Add;
-use syn::{FnArg, ImplItem, ImplItemMethod, ItemImpl, LifetimeDef, Type, TypeParamBound};
+use syn::{FnArg, ImplItem, ImplItemMethod, ItemImpl, Type, TypeParam, TypeParamBound};
 
 pub(crate) struct TraitImplementation {
     pub(crate) inner_trait: ItemImpl,
@@ -30,13 +30,11 @@ impl TraitImplementation {
     pub(crate) fn process(self) -> TokenStream {
         let mut t = self.inner_trait;
         let mut new_types = vec![];
-        let trait_lifetimes = t.generics.lifetimes().collect::<Vec<_>>();
+        let generics = t.generics.type_params().collect::<Vec<_>>();
         t.items
             .iter_mut()
             .map(|mut s| match &mut s {
-                ImplItem::Method(method) => {
-                    process_method(method, &mut new_types, &trait_lifetimes)
-                }
+                ImplItem::Method(method) => process_method(method, &mut new_types, &generics),
                 ImplItem::Verbatim(_)
                 | ImplItem::Const(_)
                 | ImplItem::Macro(_)
@@ -56,7 +54,7 @@ impl TraitImplementation {
 fn process_method<'a>(
     method: &'a mut ImplItemMethod,
     new_types: &'a mut Vec<TokenStream>,
-    trait_lifetimes: &'a [&'a LifetimeDef],
+    trait_lifetimes: &'a [&'a TypeParam],
 ) {
     let mut register = MethodRegister::new(method, new_types, 0, trait_lifetimes);
     if let syn::ReturnType::Type(arr, mut ty) = method.sig.output.clone() {
@@ -149,7 +147,7 @@ fn process_type(ty: &mut Type, register: &mut MethodRegister) {
         | Type::Macro(_)
         | Type::TraitObject(_)
         | Type::Infer(_) => (), // these types don't encapsulate any other type.
-        Type::__TestExhaustive(_) => abort!(ty.span(), "please report this bug"),
+        _ => abort!(ty.span(), "please report this bug"),
     }
 }
 
@@ -157,7 +155,7 @@ struct MethodRegister<'a> {
     method: &'a ImplItemMethod,
     new_types: &'a mut Vec<TokenStream>,
     counter: u64,
-    _trait_lifetimes: &'a [&'a LifetimeDef],
+    types: &'a [&'a TypeParam],
 }
 
 impl<'a> MethodRegister<'a> {
@@ -165,13 +163,13 @@ impl<'a> MethodRegister<'a> {
         method: &'a ImplItemMethod,
         new_types: &'a mut Vec<TokenStream>,
         counter: u64,
-        _trait_lifetimes: &'a [&'a LifetimeDef],
+        types: &'a [&'a TypeParam],
     ) -> Self {
         Self {
             method,
             new_types,
             counter,
-            _trait_lifetimes,
+            types,
         }
     }
 
@@ -201,13 +199,25 @@ impl<'a> MethodRegister<'a> {
         let (bound_generics, generics, _) = &self.method.sig.generics.split_for_impl();
         let num = self.counter;
         let ident = format_ident!("impl_trait_{}_{}", ident, num);
+
+        let mut extra_bounds = vec![];
+        self.types.clone().iter().for_each(|s| {
+            for lt in self.method.sig.generics.lifetimes() {
+                let ident = &s.ident;
+                extra_bounds.push(syn::parse2(quote!(#ident: #lt)).unwrap());
+            }
+        });
+        for bound in extra_bounds {
+            where_clause.predicates.push(bound);
+        }
+
         let ts = quote!(
             #[allow(non_camel_case_types)]
             type #ident #bound_generics #where_clause = impl #bounds;
-        )
-        .into();
+        );
+
         self.counter += 1;
-        self.new_types.push(ts);
+        self.new_types.push(ts.into());
         let ty = Type::Path(syn::parse2(quote!(Self::#ident #generics)).unwrap());
         ty
     }

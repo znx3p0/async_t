@@ -4,7 +4,7 @@ use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::token::Add;
-use syn::{FnArg, ItemTrait, LifetimeDef, TraitItem, TraitItemMethod, Type, TypeParamBound};
+use syn::{FnArg, ItemTrait, TraitItem, TraitItemMethod, Type, TypeParam, TypeParamBound};
 
 pub(crate) struct TraitDeclaration {
     pub(crate) inner_trait: ItemTrait,
@@ -21,7 +21,7 @@ impl TraitDeclaration {
     pub(crate) fn process(self) -> TokenStream {
         let mut t = self.inner_trait;
         let mut new_types = vec![];
-        let trait_lifetimes = t.generics.lifetimes().collect::<Vec<_>>();
+        let trait_lifetimes = t.generics.type_params().collect::<Vec<_>>();
         t.items
             .iter_mut()
             .map(|mut s| match &mut s {
@@ -40,6 +40,7 @@ impl TraitDeclaration {
             .map(|s| TraitItem::Verbatim(s.into()))
             .collect();
         t.items.append(&mut new_types);
+
         quote!(#t).into()
     }
 }
@@ -47,7 +48,7 @@ impl TraitDeclaration {
 fn process_method<'a>(
     method: &'a mut TraitItemMethod,
     new_types: &'a mut Vec<TokenStream>,
-    trait_lifetimes: &'a [&'a LifetimeDef],
+    trait_lifetimes: &'a [&'a TypeParam],
 ) {
     let mut register = MethodRegister::new(method, new_types, 0, trait_lifetimes);
     if let syn::ReturnType::Type(arr, mut ty) = method.sig.output.clone() {
@@ -140,7 +141,7 @@ fn process_type(ty: &mut Type, register: &mut MethodRegister) {
         | Type::Macro(_)
         | Type::TraitObject(_)
         | Type::Infer(_) => (), // these types don't encapsulate any other type.
-        Type::__TestExhaustive(_) => abort!(ty.span(), "please report this bug"),
+        _ => abort!(ty.span(), "please report this bug"),
     }
 }
 
@@ -148,7 +149,7 @@ struct MethodRegister<'a> {
     method: &'a TraitItemMethod,
     new_types: &'a mut Vec<TokenStream>,
     counter: u64,
-    _trait_lifetimes: &'a [&'a LifetimeDef],
+    types: &'a [&'a TypeParam],
 }
 
 impl<'a> MethodRegister<'a> {
@@ -156,13 +157,13 @@ impl<'a> MethodRegister<'a> {
         method: &'a TraitItemMethod,
         new_types: &'a mut Vec<TokenStream>,
         counter: u64,
-        _trait_lifetimes: &'a [&'a LifetimeDef],
+        types: &'a [&'a TypeParam],
     ) -> Self {
         Self {
             method,
             new_types,
             counter,
-            _trait_lifetimes,
+            types,
         }
     }
 
@@ -170,6 +171,17 @@ impl<'a> MethodRegister<'a> {
         let ident = &self.method.sig.ident;
         let mut where_clause = self.method.sig.generics.clone();
         let where_clause = where_clause.make_where_clause();
+
+        let mut extra_bounds = vec![];
+        self.types.clone().iter().for_each(|s| {
+            for lt in self.method.sig.generics.lifetimes() {
+                let ident = &s.ident;
+                extra_bounds.push(syn::parse2(quote!(#ident: #lt)).unwrap());
+            }
+        });
+        for bound in extra_bounds {
+            where_clause.predicates.push(bound);
+        }
 
         // check for self lifetimes
         self.method.sig.inputs.first().and_then(|arg| {
